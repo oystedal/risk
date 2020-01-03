@@ -14,6 +14,11 @@ class PlayerNotInTurn : public std::exception
 public:
 };
 
+class IllegalMove : public std::exception
+{
+public:
+};
+
 class Card {};
 
 class Player {
@@ -46,6 +51,10 @@ public:
     {}
 
     auto id() const { return id_; }
+
+    std::optional<Player::Id> owner() const { return owner_; }
+    void owner(Player::Id id) { owner_ = id; }
+
 private:
     Id id_;
     std::string_view name_;
@@ -203,11 +212,21 @@ void Game::place_unit(Player::Id player_id, Territory::Id territory_id)
 
     ensure(is_player_turn(player_id), PlayerNotInTurn{});
 
-    // TODO: Territory exists
     // TODO: Any unclaimed territories?
     // TODO:  - Selected territory must be unclaimed
-    // TODO: Else:
-    // TODO:  - Territory must be claimed by player
+    auto territories = state().board().territories();
+    auto territory_iter = std::find_if(
+            std::begin(territories), std::end(territories),
+            [territory_id] (const Territory& territory) {
+                return territory.id() == territory_id;
+            }
+        );
+    auto& territory = *territory_iter;
+    if (!territory.owner()) {
+        territory.owner(player_id);
+    } else if (territory.owner() != player_id) {
+        throw IllegalMove{}; // "Player not allowed to place unit in a territory owned by another player"
+    }
 
     auto players = state().players();
 
@@ -231,7 +250,7 @@ void Game::place_unit(Player::Id player_id, Territory::Id territory_id)
         );
 
     auto new_state = State{
-        state().board(),
+        Board{territories},
         units_left_to_place ? Phase::Placing : Phase::Playing,
         next_players_turn(players),
         state().cards(),
@@ -361,8 +380,7 @@ TEST_F(PlacementPhaseFixture, player_tries_to_place_unit_in_territory_claimed_by
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
     ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}));
-    // TODO:
-    // ASSERT_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}), IllegalMove{});
+    ASSERT_THROW(game.place_unit(Player::Id{2}, Territory::Id{1}), IllegalMove);
 }
 
 TEST_F(PlacementPhaseFixture, player_places_unit_in_territory_claimed_by_same_player)
