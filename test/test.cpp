@@ -23,15 +23,26 @@ public:
         : id_(id)
     {}
     auto id() const { return id_; }
+    void give_units_to_place(std::size_t units) { units_left_to_place_ = units; }
+    void placed_unit();
+    std::size_t units() const { return units_left_to_place_; }
 private:
     int id_;
+    std::size_t units_left_to_place_;
 };
+
+void Player::placed_unit()
+{
+    assert(units_left_to_place_);
+    --units_left_to_place_;
+}
 
 class Territory {
 public:
     using Id = int;
 private:
-    std::string_view name;
+    std::string_view name_;
+    std::optional<Player::Id> owner_;
 };
 
 class Board {};
@@ -67,13 +78,15 @@ using Dice = std::function<int ()>;
 
 class Game {
 public:
-    Game(std::vector<Player> players, Dice dice)
-        : state_(Board{}, Phase::Placing, players, {})
+    Game(Board board, std::vector<Player> players, Dice dice)
+        : state_(board, Phase::Placing, players, {})
         , dice_(std::move(dice))
     {
+        give_units_to_each_player();
         decide_starting_player();
     }
 
+    void give_units_to_each_player();
     void decide_starting_player();
 
     const auto& state() const { return state_; }
@@ -112,6 +125,27 @@ private:
     Dice dice_;
 };
 
+void Game::give_units_to_each_player()
+{
+    auto players = state().players();
+
+    std::for_each(
+        std::begin(players), std::end(players),
+        [] (Player& player) {
+            player.give_units_to_place(35);
+        }
+    );
+
+    auto new_state = State{
+        state().board(),
+        Phase::Placing,
+        players,
+        state().cards(),
+    };
+
+    update(new_state);
+}
+
 void Game::decide_starting_player()
 {
     const int dice = roll_dice();
@@ -143,16 +177,31 @@ void Game::place_unit(Player::Id player_id, Territory::Id territory_id)
     // TODO: Else:
     // TODO:  - Territory must be claimed by player
 
-    auto next_players_turn = [this] {
-        auto players = state().players();
+    auto players = state().players();
+
+    auto decrease_number_of_units_to_place = [] (Player& player) {
+        player.placed_unit();
+    };
+
+    decrease_number_of_units_to_place(players[0]);
+
+    auto next_players_turn = [] (std::vector<Player> players) {
         std::rotate(std::begin(players), std::begin(players) + 1, std::end(players));
         return players;
     };
 
+    bool units_left_to_place =
+        std::any_of(
+            std::begin(players), std::end(players),
+            [] (const Player& player) {
+                return player.units() > 0U;
+            }
+        );
+
     auto new_state = State{
         state().board(),
-        Phase::Placing,
-        next_players_turn(),
+        units_left_to_place ? Phase::Placing : Phase::Playing,
+        next_players_turn(players),
         state().cards(),
     };
 
@@ -170,6 +219,7 @@ struct PlacementPhaseFixture : public ::testing::Test
     PlacementPhaseFixture()
         : next_dice_throws(start_with_player(1))
         , game(
+            Board{},
             {Player{1}, Player{2}, Player{3}},
             [this] { return throw_dice(); }
           )
@@ -208,12 +258,12 @@ TEST_F(PlacementPhaseFixture, highest_dice_throwing_player_starts)
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
 
     next_dice_throws = start_with_player(2);
-    game = Game({Player{1}, Player{2}, Player{3}}, [this] { return throw_dice(); } );
+    game = Game(Board{}, {Player{1}, Player{2}, Player{3}}, [this] { return throw_dice(); } );
 
     EXPECT_EQ(Player::Id{2}, game.state().current_player().id());
 
     next_dice_throws = start_with_player(3);
-    game = Game({Player{1}, Player{2}, Player{3}}, [this] { return throw_dice(); } );
+    game = Game(Board{}, {Player{1}, Player{2}, Player{3}}, [this] { return throw_dice(); } );
 
     EXPECT_EQ(Player::Id{3}, game.state().current_player().id());
 }
@@ -288,7 +338,13 @@ TEST_F(PlacementPhaseFixture, player_places_unit_in_territory_claimed_by_same_pl
 
 TEST_F(PlacementPhaseFixture, placement_phase_ends_when_no_player_has_units_left_to_place)
 {
+    for (std::size_t i = 0; i < 35; ++i) {
+        ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}));
+        ASSERT_NO_THROW(game.place_unit(Player::Id{2}, Territory::Id{2}));
+        ASSERT_NO_THROW(game.place_unit(Player::Id{3}, Territory::Id{3}));
+    }
 
+    ASSERT_EQ(risk::rules::Phase::Playing, game.state().phase());
 }
 
 
