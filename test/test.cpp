@@ -40,12 +40,30 @@ void Player::placed_unit()
 class Territory {
 public:
     using Id = int;
+
+    Territory(Id id)
+        : id_(id)
+    {}
+
+    auto id() const { return id_; }
 private:
+    Id id_;
     std::string_view name_;
     std::optional<Player::Id> owner_;
 };
 
-class Board {};
+class Board {
+public:
+    Board() = default; // TODO: Remove
+    Board(std::vector<Territory> territories)
+        : territories_(territories)
+    {}
+
+    auto territories() const { return territories_; }
+
+private:
+    std::vector<Territory> territories_;
+};
 
 enum class Phase {
     Placing,
@@ -120,6 +138,18 @@ public:
         );
     }
 
+    bool territory_exists(Territory::Id id) const
+    {
+        auto territories = state().board().territories();
+        return std::any_of(
+            std::begin(territories), std::end(territories),
+            [id] (const Territory& territory) {
+                return territory.id() == id;
+            }
+        );
+    }
+
+
 private:
     State state_;
     Dice dice_;
@@ -169,6 +199,8 @@ void Game::place_unit(Player::Id player_id, Territory::Id territory_id)
     // TODO: Player exists
 
     ensure(player_exists(player_id), std::out_of_range("Player ID not in range"));
+    ensure(territory_exists(territory_id), std::out_of_range("Territory ID not in range"));
+
     ensure(is_player_turn(player_id), PlayerNotInTurn{});
 
     // TODO: Territory exists
@@ -218,8 +250,13 @@ struct PlacementPhaseFixture : public ::testing::Test
 {
     PlacementPhaseFixture()
         : next_dice_throws(start_with_player(1))
+        , board{{
+            Territory{1},
+            Territory{2},
+            Territory{3},
+        }}
         , game(
-            Board{},
+            board,
             {Player{1}, Player{2}, Player{3}},
             [this] { return throw_dice(); }
           )
@@ -245,6 +282,7 @@ protected:
 protected:
 
     std::vector<int> next_dice_throws;
+    Board board;
     risk::rules::Game game;
 };
 
@@ -271,7 +309,7 @@ TEST_F(PlacementPhaseFixture, highest_dice_throwing_player_starts)
 TEST_F(PlacementPhaseFixture, player1_places_a_unit)
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
-    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{0}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}));
 
     ASSERT_EQ(risk::rules::Phase::Placing, game.state().phase());
     EXPECT_EQ(Player::Id{2}, game.state().current_player().id());
@@ -280,7 +318,7 @@ TEST_F(PlacementPhaseFixture, player1_places_a_unit)
 TEST_F(PlacementPhaseFixture, player2_tries_to_place_a_unit_when_not_in_turn)
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
-    ASSERT_THROW(game.place_unit(Player::Id{2}, Territory::Id{0}), risk::rules::PlayerNotInTurn);
+    ASSERT_THROW(game.place_unit(Player::Id{2}, Territory::Id{1}), risk::rules::PlayerNotInTurn);
 
     ASSERT_EQ(risk::rules::Phase::Placing, game.state().phase());
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
@@ -289,8 +327,8 @@ TEST_F(PlacementPhaseFixture, player2_tries_to_place_a_unit_when_not_in_turn)
 TEST_F(PlacementPhaseFixture, player1_places_a_unit_then_player2)
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
-    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{0}));
-    ASSERT_NO_THROW(game.place_unit(Player::Id{2}, Territory::Id{0}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{2}, Territory::Id{2}));
 
     ASSERT_EQ(risk::rules::Phase::Placing, game.state().phase());
     EXPECT_EQ(Player::Id{3}, game.state().current_player().id());
@@ -299,9 +337,9 @@ TEST_F(PlacementPhaseFixture, player1_places_a_unit_then_player2)
 TEST_F(PlacementPhaseFixture, player1_places_a_unit_then_player2_then_player3)
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
-    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{0}));
-    ASSERT_NO_THROW(game.place_unit(Player::Id{2}, Territory::Id{0}));
-    ASSERT_NO_THROW(game.place_unit(Player::Id{3}, Territory::Id{0}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{1}, Territory::Id{1}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{2}, Territory::Id{2}));
+    ASSERT_NO_THROW(game.place_unit(Player::Id{3}, Territory::Id{3}));
 
     ASSERT_EQ(risk::rules::Phase::Placing, game.state().phase());
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
@@ -316,8 +354,7 @@ TEST_F(PlacementPhaseFixture, unknown_player_tries_to_place_a_unit)
 TEST_F(PlacementPhaseFixture, player_tries_to_place_unit_in_unknown_territory)
 {
     EXPECT_EQ(Player::Id{1}, game.state().current_player().id());
-    // TODO:
-    // ASSERT_THROW(game.place_unit(Player::Id{1}, Territory::Id{0}), std::out_of_range);
+    ASSERT_THROW(game.place_unit(Player::Id{1}, Territory::Id{0}), std::out_of_range);
 }
 
 TEST_F(PlacementPhaseFixture, player_tries_to_place_unit_in_territory_claimed_by_other_player)
